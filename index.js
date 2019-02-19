@@ -113,18 +113,31 @@ class TimeoutError extends Error {
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-const timeout = (promise, ms, abortController) => Promise.race([
-	promise,
-	(async () => {
-		await delay(ms);
-		if (abortController) {
-			// Throw TimeoutError first
-			setTimeout(() => abortController.abort(), 1);
-		}
+// const timeout = (promise, ms, abortController) => Promise.race([
+// 	promise,
+// 	(async () => {
+// 		await delay(ms);
+// 		if (abortController) {
+// 			// Throw TimeoutError first
+// 			setTimeout(() => abortController.abort(), 1);
+// 		}
 
-		throw new TimeoutError();
-	})()
-]);
+// 		throw new TimeoutError();
+// 	})()
+// ]);
+const timeout = (promise, ms, abortController) => {
+  return Promise.race([
+    promise,
+    delay(ms).then( () => {
+      if (abortController) {
+        // Throw TimeoutError first
+        setTimeout(() => abortController.abort(), 1);
+      }
+
+      throw new TimeoutError();
+    })
+  ]);
+};
 
 const normalizeRequestMethod = input => requestMethods.includes(input) ? input.toUpperCase() : input;
 
@@ -207,33 +220,71 @@ class Ky {
 
 		this._response = this._fetch();
 
-		for (const type of responseTypes) {
-			const isRetriableMethod = retryMethods.has(this._options.method.toLowerCase());
-			const fn = async () => {
-				if (this._retryCount > 0) {
-					this._response = this._fetch();
-				}
+		// for (const type of responseTypes) {
+		// 	const isRetriableMethod = retryMethods.has(this._options.method.toLowerCase());
 
-				let response = await this._response;
+		// 	// const fn = async () => {
+		// 	// 	if (this._retryCount > 0) {
+		// 	// 		this._response = this._fetch();
+		// 	// 	}
 
-				for (const hook of this._hooks.afterResponse) {
-					// eslint-disable-next-line no-await-in-loop
-					const modifiedResponse = await hook(response.clone());
+		// 	// 	let response = await this._response;
 
-					if (modifiedResponse instanceof Response) {
-						response = modifiedResponse;
-					}
-				}
+		// 	// 	for (const hook of this._hooks.afterResponse) {
+		// 	// 		// eslint-disable-next-line no-await-in-loop
+		// 	// 		const modifiedResponse = await hook(response.clone());
 
-				if (!response.ok && (isRetriableMethod || this._throwHttpErrors)) {
-					throw new HTTPError(response);
-				}
+		// 	// 		if (modifiedResponse instanceof Response) {
+		// 	// 			response = modifiedResponse;
+		// 	// 		}
+		// 	// 	}
 
-				return response.clone()[type]();
-			};
+		// 	// 	if (!response.ok && (isRetriableMethod || this._throwHttpErrors)) {
+		// 	// 		throw new HTTPError(response);
+		// 	// 	}
 
-			this._response[type] = isRetriableMethod ? this._retry(fn) : fn;
-		}
+		// 	// 	return response.clone()[type]();
+		// 	// };
+
+		// 	// this._response[type] = isRetriableMethod ? this._retry(fn) : fn;
+
+		// 	const fn = new Promise( (main_resolve, main_reject) => {
+		// 	  if (this._retryCount > 0) {
+		// 	    this._response = this._fetch();
+		// 	  }
+		// 	  this._response.then( (response) => {
+		// 	    const end = () => {
+		// 	      if (!response.ok && (isRetriableMethod || this._throwHttpErrors)) {
+		// 	        main_reject( new HTTPError(response) );
+		// 	        return;
+		// 	      }
+		// 	      main_resolve( response.clone()[type]() );
+		// 	    };
+		// 	    const hooks = this._hooks.afterResponse || [];
+
+		//       const exec_hook = (i) => {
+		//         if ( i >= hooks.length ) {
+		//           return end();
+		//         }
+		//         let hook = hooks[ i ]( response.clone() );
+		//         if ( hook instanceof Promise ){
+		//           hook.then( (resp) => {
+		//             if ( resp instanceof Response ) {
+		//               response = resp;
+		//             }
+		//             exec_hook(i+1);
+		//           });
+		//           return;
+		//         } else if ( hook instanceof Response ) {
+		//           response = hook;
+		//         }
+		//         exec_hook(i+1);
+		//       };
+		//       exec_hook(0);
+		// 	  });
+		// 	});
+		// 	this._response[type] = isRetriableMethod ? this._retry(fn) : fn;
+		// }
 
 		return this._response;
 	}
@@ -272,32 +323,74 @@ class Ky {
 	}
 
 	_retry(fn) {
-		const retry = async () => {
-			try {
-				return await fn();
-			} catch (error) {
-				const ms = this._calculateRetryDelay(error);
-				if (ms !== 0) {
-					await delay(ms);
-					return retry();
-				}
+		// const retry = async () => {
+		// 	try {
+		// 		return await fn();
+		// 	} catch (error) {
+		// 		const ms = this._calculateRetryDelay(error);
+		// 		if (ms !== 0) {
+		// 			await delay(ms);
+		// 			return retry();
+		// 		}
 
-				if (this._throwHttpErrors) {
-					throw error;
-				}
-			}
-		};
+		// 		if (this._throwHttpErrors) {
+		// 			throw error;
+		// 		}
+		// 	}
+		// };
+		const retry = new Promise( (main_resolve, main_reject) => {
+
+		  fn.then( main_resolve, (error) => {
+		    const ms = this._calculateRetryDelay(error);
+		    if (ms !== 0) {
+		      delay(ms).then( () => {
+		        return retry();
+		      });
+		    }
+
+		    if (this._throwHttpErrors) {
+		      main_reject(error);
+		      throw error;
+		    }
+		  });
+
+		});
 
 		return retry;
 	}
 
-	async _fetch() {
-		for (const hook of this._hooks.beforeRequest) {
-			// eslint-disable-next-line no-await-in-loop
-			await hook(this._options);
-		}
+	// async _fetch() {
+	// 	for (const hook of this._hooks.beforeRequest) {
+	// 		// eslint-disable-next-line no-await-in-loop
+	// 		await hook(this._options);
+	// 	}
 
-		return timeout(fetch(this._input, this._options), this._timeout, this.abortController);
+	// 	return timeout( fetch(this._input, this._options), this._timeout, this.abortController );
+	// }
+	_fetch() {
+	  return new Promise( (main_resolve, main_reject) => {
+
+	    const end = () => {
+	      timeout( fetch(this._input, this._options), this._timeout, this.abortController ).then( main_resolve, main_reject );
+	    };
+
+	    const exec_hook = (i) => {
+	      if ( i >= hooks.length ) {
+	        return end();
+	      }
+	      let hook = hooks[ i ]( this._options );
+	      if ( hook instanceof Promise ){
+	        hook.then( () => {
+	          exec_hook(i+1);
+	        });
+	        return;
+	      }
+	      exec_hook(i+1);
+	    };
+
+	    const hooks = this._hooks.beforeRequest || [];
+      exec_hook(0);
+	  });
 	}
 }
 
