@@ -129,6 +129,11 @@ const timeout = (promise, ms, abortController) => Promise.race([
 const normalizeRequestMethod = input => requestMethods.includes(input) ? input.toUpperCase() : input;
 
 class Ky {
+
+	static get VERSION() {
+		return process.env.VERSION;
+	}
+
 	constructor(input, {
 		timeout = 10000,
 		hooks,
